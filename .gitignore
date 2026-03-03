@@ -1,0 +1,15 @@
+# build files and dev artifacts
+build/
+**/__pycache__/
+.claude/
+.vscode/
+
+# secret keys
+aws.sh
+
+# results
+openevolve/results
+openevolve/artifacts
+shinka/results
+**results/
+**figures/

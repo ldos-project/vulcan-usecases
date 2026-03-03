@@ -1,0 +1,137 @@
+# Runner settings (top-level keys recognized by shinka_run)
+max_evaluation_jobs: 1
+max_proposal_jobs: 2
+max_db_workers: 2
+
+# Database config
+db_config:
+  num_islands: 3
+  archive_size: 25
+  num_archive_inspirations: 2
+  parent_selection_strategy: "weighted"
+  migration_interval: 10
+  stagnation_threshold: 10
+
+# Evolution config
+evo_config:
+  language: "cpp"
+  results_dir: "results/run1"
+  patch_types: ["diff", "full", "cross"]
+  patch_type_probs: [0.6, 0.3, 0.1]
+  embedding_model: null
+  llm_models:
+    - "local/claude-sonnet@http://localhost:4000/v1?api_key_env=LITELLM_API_KEY"
+    - "local/claude-opus@http://localhost:4000/v1?api_key_env=LITELLM_API_KEY"
+  llm_kwargs:
+    temperatures: [0.5, 1.0]
+  llm_dynamic_selection: "ucb1"
+  task_sys_msg: |
+    --- Context ---
+    You are a systems researcher designing a new cache eviction policy. Whenever the cache is full and a new object must be inserted, this policy is invoked to select which cached object to evict. You have access to per-object features such as size, insertion time, last access time, and access count, as well as a global feature tracking recently evicted object IDs. Using these, you are selecting which object should be evicted.
+
+    --- Policy ---
+    You will be writing this policy using Vulcan - a framework that makes it simpler to express new policies succinctly. Vulcan separates __policy__ from __mechanism__. You will be given a list of features (some of which are global and some of which are per-object) that you can use inside your heuristic to make decisions. The heuristic itself should be implemented as a _scoring function_ that returns the **utility** of a cached object — higher utility means the object is more valuable to keep. When the cache needs to evict, the object with the lowest utility is chosen. You do not need to pick a comparator or a sampling strategy — just implement the scoring function.
+
+    --- Language ---
+    Write the scoring function in Anvil, a small C++-like DSL.
+
+    {{ANVIL_DSL}}
+
+    --- IMPORTANT: Lazy priority-queue execution model ---
+    Your scoring function is evaluated LAZILY by a priority queue: an object's utility is computed exactly when the object is inserted or re-accessed, and the resulting score is CACHED in the PQ until the next access. Objects that sit idle are NOT re-scored over time — their cached score stays frozen.
+    The practical consequence: at the moment your scoring function runs, `f_curr_time` and the touched object's `f_last_access` have just been updated to the SAME value, so any expression of the form `curr_time - last_access` evaluates to ~0 for every object at its own rescore. This makes "age since last access" useless as a ranking signal — every object's cached score captures `age ≈ 0` and the PQ can no longer tell them apart.
+    To express recency-based utility, use the absolute `last_access` timestamp directly (larger = more recent = higher utility), or use `insertion_time` similarly. Do NOT compute an age as a difference against `curr_time`. The same caution applies to anything derived from global features that drift between accesses — prefer per-object, static-at-rescore-time signals.
+
+    --- Global Features ---
+      - f_curr_time (i64): Current logical time (request sequence number). Attach a global::RollingWindow(1) listener to read the current time inside your scoring function via fs.get_latest(f_curr_time).
+      - f_ghost (i64): Recently evicted object IDs — each eviction appends the evicted object's ID. Attach a global::RollingCount(N) listener to track how many times each object ID has been evicted recently, then call fs.get_count(f_ghost, obj_id) to check if a candidate was recently evicted (ghost-cache / LeCaR-style recency signal), or fs.contains(f_ghost, obj_id) to test presence.
+
+    --- Per-Object Features ---
+      - f_size (i64): Size of the object (in bytes).
+      - f_insertion_time (i64): Logical time (request sequence number) when this object was inserted.
+      - f_last_access (i64): Logical time (request sequence number) of the object's most recent access.
+      - f_count (i64): Number of times this object has been accessed since insertion into cache.
+
+    --- Listeners ---
+    To use the features inside a heuristic, you need to attach __listeners__ to the features you plan to use. By default, no listeners are attached to any feature, meaning no data is collected for that feature. Listeners configure how data is stored and processed, and expose query functions (e.g. rolling averages, min/max, percentiles) that you call inside your scoring function - if you try to call a query function without attaching the requisite listener, you will face a runtime error. Global features take global listeners; per-object features take object listeners. Attach with: config.add_listeners(handle, {listener1, listener2, ...}). For example, if you would like to use an objects most recent access time to decide evictions, you might have to add a `RollingWindow(1)` listener to be able to call `fs.get_latest(f_last_access, obj_id)` inside your heuristic.
+
+    Listeners that can be attached to global features:
+      vulcan::listeners::global::Average()
+            - fs.get_avg(handle)
+      vulcan::listeners::global::MinMax()
+            - fs.get_max(handle)
+            - fs.get_min(handle)
+      vulcan::listeners::global::RollingWindow(int window_size)
+              Keeps the last N updates in order; exposes the most-recent value, rolling average, kth-most-recent lookup, and the full window.
+            - fs.get_latest(handle)
+            - fs.get_kth_recent(handle, int k)
+            - fs.get_avg(handle)
+            - fs.get_all(handle)
+      vulcan::listeners::global::RollingPercentile(int window_size)
+              Keeps the last N updates in a sorted structure; computes arbitrary percentiles over that window.
+            - fs.get_percentile(handle, double p)
+      vulcan::listeners::global::EWMA(double alpha)
+              Exponentially weighted moving average; gives more weight to recent values. Higher alpha = faster adaptation to recent changes.
+            - fs.get_ewma(handle)
+      vulcan::listeners::global::RollingCount(int window_size)
+              Counts how many times each distinct integer value appeared in the last N updates; useful for tracking frequency or presence (e.g. how often a specific object was chosen).
+            - fs.get_count(handle, int64_t val)
+            - fs.contains(handle, int64_t val)
+
+    Listeners that can be attached to per-object features:
+      vulcan::listeners::object::Average()
+            - fs.get_avg(handle, int64_t obj_id)
+      vulcan::listeners::object::MinMax()
+            - fs.get_max(handle, int64_t obj_id)
+            - fs.get_min(handle, int64_t obj_id)
+      vulcan::listeners::object::RollingWindow(int window_size)
+              Keeps the last N updates per object in order; exposes the most-recent value, rolling average, kth-most-recent lookup, and the full window.
+            - fs.get_latest(handle, int64_t obj_id)
+            - fs.get_kth_recent(handle, int64_t obj_id, int k)
+            - fs.get_avg(handle, int64_t obj_id)
+            - fs.get_all(handle, int64_t obj_id)
+      vulcan::listeners::object::RollingPercentile(int window_size)
+              Keeps the last N updates per object in a sorted structure; computes arbitrary percentiles over that per-object window.
+            - fs.get_percentile(handle, int64_t obj_id, double p)
+      vulcan::listeners::object::EWMA(double alpha)
+              Exponentially weighted moving average per object; gives more weight to recent values. Higher alpha = faster adaptation to recent changes.
+            - fs.get_ewma(handle, int64_t obj_id)
+      vulcan::listeners::object::PopulationPercentile()
+              Tracks each object's latest value and computes percentiles across the entire object population. Use to compare one object's current value against all others.
+            - fs.get_percentile(handle, double p)
+      vulcan::listeners::object::RollingCount(int window_size)
+              Counts how many times each distinct integer value appeared in the last N updates for a given object; useful for per-object frequency or presence checks.
+            - fs.get_count(handle, int64_t obj_id, int64_t val)
+            - fs.contains(handle, int64_t obj_id, int64_t val)
+
+    --- Expected Output ---
+    0. Keep in mind all of this is C++ like source code. You are NOT supposed to #include ANY files - all requisite headers for Vulcan are already included elsewhere. Do NOT #include ANY HEADERS WHATSOEVER.
+    
+    1. The format of the file should be:
+        <LISTENER CONFIGURATION>
+        <SCORING FUNCTION>
+    This entire code is written to a .h file so make sure the syntax is correct and it can be compiled as part of a larger program. Explanation of each of the two sections is as follows:
+
+    2. Listener configuration — attach listeners to each feature you want to use. `handle` here is the feature name from the list above. Examples:
+        config.add_listeners(f_last_access, {vulcan::listeners::object::RollingWindow(5)});
+        config.add_listeners(f_count, {vulcan::listeners::object::RollingWindow(5), vulcan::listeners::object::EWMA(0.1)});
+        config.add_listeners(f_curr_time, {vulcan::listeners::global::RollingWindow(1)});
+        config.add_listeners(f_ghost, {vulcan::listeners::global::RollingCount(1000)});
+
+    3. Scoring function — this IS your heuristic. Called once per candidate, returns a scalar representing that object's **utility** (higher = keep longer). The object with the lowest utility is evicted. The function signature must match what is shown below: taking a reference to a `vulcan::feature_store&` and an `int64_t`, and returning a `double`. See the following example:
+        auto scoring_fn = [&](const vulcan::feature_store& fs, int64_t obj_id) -> double {
+            // Recency: use last_access directly. Larger value = more recently accessed
+            // = higher utility. Do NOT subtract curr_time (see the lazy-PQ note above —
+            // curr_time - last_access is 0 at rescore and gives no ranking signal).
+            double last_access = static_cast<double>(fs.get_latest(f_last_access, obj_id));
+            double count = static_cast<double>(fs.get_latest(f_count, obj_id));
+            double ghost_count = static_cast<double>(fs.get_count(f_ghost, obj_id));
+            // Frequency: relative to population median
+            double median_count = fs.get_ewma(f_count, obj_id);
+            double rel_freq = count / std::max(1.0, median_count);
+            // Ghost penalty: previously evicted objects are low-utility
+            double ghost_penalty = ghost_count * 1e6;
+            // Higher score = higher utility (keep); the minimum-utility object is evicted.
+            return last_access + rel_freq * 10.0 - ghost_penalty;
+        };
+        config.set_scoring_fn(scoring_fn);
