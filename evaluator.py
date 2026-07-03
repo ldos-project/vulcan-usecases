@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import signal
+import subprocess
 import sys
 from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -39,22 +40,36 @@ os.environ.setdefault("WANDB_MODE", "offline")
 # -----------------------------------------------------------------------------
 # Config
 # -----------------------------------------------------------------------------
-TRACE_TARGET = 30  # per environment, take up to 30 traces evenly spaced
+TRACE_TARGET = int(os.environ.get("EVAL_TRACE_TARGET", "30"))  # per environment, take up to N traces
 
-ENV_PATHS = [
+_DEFAULT_ENV_PATHS = [
     "us-west-2a_k80_1",
     "us-west-2b_k80_1",
     "us-west-2a_v100_1",
     "us-west-2b_v100_1",
 ]
+_env_filter = os.environ.get("EVAL_ENV_FILTER", "").strip()
+ENV_PATHS = (
+    [e.strip() for e in _env_filter.split(",") if e.strip()]
+    if _env_filter
+    else _DEFAULT_ENV_PATHS
+)
 
-JOB_CONFIGS = [
+_DEFAULT_JOB_CONFIGS = [
     {"duration": 48, "deadline": 52},
     {"duration": 48, "deadline": 70},
     {"duration": 48, "deadline": 92},
 ]
+_jobs_env = os.environ.get("EVAL_JOB_CONFIGS", "").strip()
+JOB_CONFIGS = json.loads(_jobs_env) if _jobs_env else _DEFAULT_JOB_CONFIGS
 
-CHANGEOVER_DELAYS = [0.02, 0.2, 0.4]
+_DEFAULT_CHANGEOVER_DELAYS = [0.02, 0.2, 0.4]
+_delays_env = os.environ.get("EVAL_CHANGEOVER_DELAYS", "").strip()
+CHANGEOVER_DELAYS = (
+    [float(x.strip()) for x in _delays_env.split(",") if x.strip()]
+    if _delays_env
+    else _DEFAULT_CHANGEOVER_DELAYS
+)
 
 FAILED_SCORE = -100000.0
 
@@ -161,7 +176,45 @@ def _analyze_spot_availability(traces_by_config):
     """Spot availability analysis disabled."""
     return {}
 
+VULCAN_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vulcan")
+VULCAN_WRAPPER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "initial_vulcan.py")
+
+
+def _is_cpp_program(program_path: str) -> bool:
+    return program_path.endswith((".cpp", ".h", ".hpp"))
+
+
+def _compile_vulcan_policy(program_path: str) -> tuple[bool, str]:
+    """Copy the evolve block to LLMCode.h and compile cbl_policy.so."""
+    build_sh = os.path.join(VULCAN_DIR, "build.sh")
+    try:
+        result = subprocess.run(
+            ["bash", build_sh, os.path.abspath(program_path)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        if result.returncode != 0:
+            return False, f"Compilation failed:\n{result.stderr}\n{result.stdout}"
+        return True, ""
+    except subprocess.TimeoutExpired:
+        return False, "Compilation timed out"
+    except Exception as exc:
+        return False, str(exc)
+
+
 def evaluate_stage1(program_path: str) -> dict:
+    if _is_cpp_program(program_path):
+        ok, err = _compile_vulcan_policy(program_path)
+        if not ok:
+            return {
+                "runs_successfully": 0.0,
+                "score": FAILED_SCORE,
+                "combined_score": FAILED_SCORE,
+                "error": err,
+            }
+        return {"runs_successfully": 1.0}
+
     try:
         with open(program_path, "r", encoding="utf-8") as fh:
             code = fh.read()
@@ -192,6 +245,11 @@ def evaluate_stage1(program_path: str) -> dict:
 
 def evaluate_stage2(program_path: str) -> EvaluationResult | dict:
     program_path = os.path.abspath(program_path)
+
+    # For C++ evolve blocks, stage1 already compiled the .so;
+    # run simulations using the fixed Python wrapper that loads it.
+    if _is_cpp_program(program_path):
+        program_path = os.path.abspath(VULCAN_WRAPPER)
 
     min_required_hours = max(job_config["deadline"] for job_config in JOB_CONFIGS)
     trace_pool = build_trace_pool(min_required_hours)

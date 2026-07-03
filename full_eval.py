@@ -15,31 +15,32 @@ from openevolve.evaluation_result import EvaluationResult
 logger = logging.getLogger(__name__)
 
 
+_ALL_ENV_PATHS = [
+    "us-west-2a_k80_1",
+    "us-west-2b_k80_1",
+    "us-west-2a_v100_1",
+    "us-west-2b_v100_1",
+    "us-west-2a_k80_8",
+    "us-west-2b_k80_8",
+    "us-west-2a_v100_8",
+    "us-west-2b_v100_8",
+]
+
+
 @contextmanager
 def _evaluator_context(cap: Optional[int]):
-    """Less traces for faster evaluation."""
+    """Override trace cap and env paths for full evaluation."""
     original_trace = getattr(base_evaluator, "TRACE_TARGET", None)
     original_envs = getattr(base_evaluator, "ENV_PATHS", None)
-    trace_overridden = False
-    env_overridden = False
     try:
         if cap is not None:
             base_evaluator.TRACE_TARGET = cap
-            trace_overridden = True
-        if isinstance(original_envs, list) and len(original_envs) > 1:
-            preferred_env = None
-            k80_envs = [env for env in original_envs if "k80" in env]
-            if k80_envs:
-                preferred_env = sorted(k80_envs)[-1]
-            else:
-                preferred_env = original_envs[0]
-            base_evaluator.ENV_PATHS = [preferred_env]
-            env_overridden = True
+        base_evaluator.ENV_PATHS = _ALL_ENV_PATHS
         yield
     finally:
-        if trace_overridden and original_trace is not None:
+        if original_trace is not None:
             base_evaluator.TRACE_TARGET = original_trace
-        if env_overridden:
+        if original_envs is not None:
             base_evaluator.ENV_PATHS = original_envs
 
 
@@ -83,6 +84,15 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--baseline-cache",
+        default=None,
+        help=(
+            "Path to a previously saved full_eval JSON whose target was the "
+            "baseline strategy. Skips re-evaluating the baseline and loads "
+            "its per-trace costs from the cached file instead."
+        ),
+    )
+    parser.add_argument(
         "--output",
         required=True,
         help="Path to write the detailed JSON comparison report",
@@ -108,7 +118,7 @@ def main() -> None:
     baseline_paths = args.baseline
     if not baseline_paths:
         baseline_paths = [
-            "openevolve/examples/ADRS/cant-be-late/initial_greedy.py"
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "initial_greedy.py")
         ]
 
     def _extract(result):
@@ -249,29 +259,52 @@ def main() -> None:
         }
 
 
-    baseline_records = []
-    for baseline_path in baseline_paths:
-        logger.info("Evaluating baseline strategy: %s", baseline_path)
-        baseline_result = run_full_evaluation(baseline_path, trace_cap)
-        baseline_metrics, baseline_artifacts = _extract(baseline_result)
-        if baseline_metrics.get("runs_successfully") != 1.0:
-            logger.error(
-                "Baseline strategy evaluation failed: %s",
-                baseline_metrics.get("error", "unknown error"),
+    baselines_to_compare = []
+    if args.baseline_cache:
+        logger.info("Loading cached baseline from: %s", args.baseline_cache)
+        with open(args.baseline_cache, "r", encoding="utf-8") as fh:
+            cached_data = json.load(fh)
+        cached_summary = cached_data["baselines"][0]["summary"]
+        cached_trace_costs: dict[str, list] = {}
+        for baseline_rec in cached_data.get("baselines", []):
+            for entry in baseline_rec.get("comparison", {}).get("per_trace", []):
+                key = entry["scenario"]
+                cached_trace_costs.setdefault(key, []).append({
+                    "trace_name": entry["trace_name"],
+                    "cost": entry["baseline_cost"],
+                    "config": entry.get("config"),
+                })
+        baselines_to_compare.append(
+            (args.baseline_cache, cached_summary, cached_trace_costs)
+        )
+    else:
+        for baseline_path in baseline_paths:
+            logger.info("Evaluating baseline strategy: %s", baseline_path)
+            baseline_result = run_full_evaluation(baseline_path, trace_cap)
+            baseline_metrics, baseline_artifacts = _extract(baseline_result)
+            if baseline_metrics.get("runs_successfully") != 1.0:
+                logger.error(
+                    "Baseline strategy evaluation failed: %s",
+                    baseline_metrics.get("error", "unknown error"),
+                )
+                print(
+                    json.dumps({"error": baseline_metrics}, indent=2, ensure_ascii=False)
+                )
+                raise SystemExit(1)
+            baseline_summary = _build_summary(baseline_metrics)
+            baseline_summary["total_runs"] = _sum_counts(
+                baseline_metrics.get("scenario_stats", {})
             )
-            print(
-                json.dumps({"error": baseline_metrics}, indent=2, ensure_ascii=False)
+            _, baseline_trace_costs = _load_trace_costs_for(
+                (baseline_metrics, baseline_artifacts)
             )
-            raise SystemExit(1)
+            baselines_to_compare.append(
+                (baseline_path, baseline_summary, baseline_trace_costs)
+            )
 
-        baseline_summary = _build_summary(baseline_metrics)
-        baseline_summary["total_runs"] = _sum_counts(
-            baseline_metrics.get("scenario_stats", {})
-        )
-        _, baseline_trace_costs = _load_trace_costs_for(
-            (baseline_metrics, baseline_artifacts)
-        )
-        comparison = _compute_comparison(baseline_trace_costs)
+    baseline_records = []
+    for baseline_path, baseline_summary, base_trace_costs in baselines_to_compare:
+        comparison = _compute_comparison(base_trace_costs)
         overhead_stats = _overhead_stats(comparison["per_trace"], 0.02)
 
         min_imp = comparison.get("min_improvement")

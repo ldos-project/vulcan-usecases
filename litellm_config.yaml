@@ -1,0 +1,25 @@
+# LiteLLM proxy config — bridges OpenEvolve (OpenAI SDK) → AWS Bedrock
+# Usage: source aws.sh && litellm --config litellm_config.yaml --port 4000
+#
+# AWS credentials are read from env vars populated by aws.sh.
+
+litellm_settings:
+  drop_params: true
+
+model_list:
+  - model_name: claude-sonnet
+    litellm_params:
+      model: bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0
+      aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
+      aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
+      aws_region_name: os.environ/AWS_DEFAULT_REGION
+
+  - model_name: claude-opus
+    litellm_params:
+      model: bedrock/us.anthropic.claude-opus-4-5-20251101-v1:0
+      aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
+      aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
+      aws_region_name: os.environ/AWS_DEFAULT_REGION
+
+general_settings:
+  master_key: sk-1234

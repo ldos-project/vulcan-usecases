@@ -1,3 +1,19 @@
-baseline_cache.json
+# output files
+*.json
+vulcan/LLMCode.h
+results/
+cbl_results/
+artifacts/
+*.png
+*.svg
+
+# build 
 *.out
-full_eval_remote.json
+*.o
+*.so
+.claude/
+**/__pycache__/
+.ipynb_checkpoints/
+
+# private keys
+aws.sh

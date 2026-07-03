@@ -1,67 +1,53 @@
-# Can't-Be-Late (NSDI'24)
+# Artifact for Vulcan Case Study on Spot VM Scheduling
+This branch of the repo is built on top of [this folder from the ADRS repo](https://github.com/UCB-ADRS/ADRS/tree/main/openevolve/examples/ADRS/cant-be-late). In this branch, you will be able to reproduce the results of Vulcan's Single Region Spot VM Scheduling case study.
 
-This folder hosts the OpenEvolve reproduction of the “Can’t Be Late” spot/on-demand scheduling problem. It contains the evolution driver, the simulator, and utilities for large-scale evaluation.
-
----
-
-## Local setup
-
-1. **Install simulator dependencies and unpack the traces.**
-
-   ```bash
-   cd openevolve/examples/ADRS/cant-be-late/simulator
-   uv sync --active
-   mkdir -p data
-   [ -d data/real ] || tar -xzf real_traces.tar.gz -C data
-   ```
-
-2. **Provide the API keys required by the prompts** (either export them manually or source a `.env`).
-
-   ```bash
-   export OPENAI_API_KEY=...
-   export GEMINI_API_KEY=...
-   ```
-
-3. **(Optional) Run an evolution round.**
-
-   ```bash
-   cd openevolve/examples/ADRS/cant-be-late
-   uv run openevolve-run initial_greedy.py evaluator.py \
-     --config config.yaml \
-     --output openevolve_output \
-     --iterations 100 \
-     --log-level INFO
-   ```
-
-   The first iteration may score poorly until the evaluator finishes loading every trace.
-
----
-
-## Remote full evaluation with SkyPilot
-
-We provide a SkyPilot workflow that launches a 64 vCPU `c6i.16xlarge`, installs the project via `uv`, runs `full_eval.py`, and copies the JSON report back to your workstation.
-
-### Prerequisites
+## Installation
+This project uses the `uv` package manager, which you can install via `pip3 install uv`.
 
 ```bash
-pip install "skypilot[aws]"
-sky check
+uv venv .cbl && source .cbl/bin/activate
+cd simulator
+uv sync --active
+mkdir -p data
+[ -d data/real ] || tar -xzf real_traces.tar.gz -C data
 ```
 
-Ensure AWS credentials are available so `sky` can provision the instance.
-
-### Launch the evaluation
-
+# Reproducing results from the paper
+1. To create the plots in our paper, download `cbl_results.tar.gz` from [our Zenodo repo for this paper](https://doi.org/10.5281/zenodo.20361338), and extract it into the current directory (`tar xzvf cbl_results.tar.gz`).
+2. Run `python3 plot_main_result.py` and `python3 plot_evolution_comparison.py` to recreate the two main plots -- these scripts will use precomputed results JSONs which are present in the `cbl_results.tar.gz` to create files `cbl-single-region.svg` and `evolution-comparison-cbl.svg` respectively.
+3. To run the synthesized heuristics yourself and confirm they match our pre-generated results files, run the following commands in the root of the repository:
 ```bash
-python scripts/run_skypilot_full_eval.py --cluster adrs-eval
+mkdir -p results/
+python full_eval.py referenced_up.py --output results/results_referenced_up.json --progress
+
+# ADRS
+python full_eval.py cbl_results/adrs_openevolve/best/best_program.py --baseline-cache results/results_referenced_up.json --output results/results_adrs.json --progress
+
+# Vulcan
+./vulcan/build.sh cbl_results/vulcan/best/best_program.cpp
+python full_eval.py initial_vulcan.py --baseline-cache results/results_referenced_up.json --output results/results_vulcan.json --progress
+
+# Vulcan (no listeners)
+./vulcan/build.sh cbl_results/vulcan_no_listeners/best/best_program.cpp
+python full_eval.py initial_vulcan.py --baseline-cache results/results_referenced_up.json --output results/results_vulcan_no_listeners.json --progress
 ```
 
-The script streams logs, compares the target strategy against both `initial_greedy.py` and `referenced_up.py`, downloads `skypilot_artifacts/full_eval_remote.json`, and prints a concise emoji summary (average cost, improvement ranges, overhead = 0.02 slice, etc.).
+## Running the search yourself
+1. Setup LiteLLM to use AWS Bedrock for inference. Create a file called `aws.sh` using `aws.sh.template` as inspiration . We use (`claude-sonnet-4-5`, `claude-opus-4-5`). Start the proxy by doing:
+   ```bash
+   source aws.sh
+   litellm --config litellm_config.yaml --port 4000 # model names exposed by LiteLLM: `claude-sonnet`, `claude-opus`.
+   ```
 
-To tear the node down afterwards:
-
+2. **ADRS BASELINE: Pure Python-based search.** Run the baseline and evaluate it by doing:
 ```bash
-python scripts/run_skypilot_full_eval.py --cluster adrs-eval --teardown
-# or
-sky down adrs-eval -y
+mkdir -p results/adrs/
+openevolve-run initial_greedy.py evaluator.py --config config.yaml --output results/adrs/ --iterations 100  --log-level INFO
 ```
+
+3. **Proposed approach: Vulcan**
+```bash
+mkdir -p results/vulcan/
+openevolve-run vulcan/base_policy.cpp evaluator.py   --config config_vulcan.yaml   --output results/vulcan/out_all_instances   --iterations 100   --log-level INFO
+```
+Once the runs complete, you can modify the eval commands and the plotting scripts from above to analyze the results of your search.
