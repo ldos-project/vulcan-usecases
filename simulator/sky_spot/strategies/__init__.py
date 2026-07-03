@@ -39,7 +39,4 @@ from sky_spot.strategies import quick_optimal_more_sliced_by_num
 from sky_spot.strategies import multi_region_time_sliced
 from sky_spot.strategies import multi_region_rc_cr_threshold
 from sky_spot.strategies import availability_split
-from sky_spot.strategies import multi_region_rc_cr_quality_bar
 from sky_spot.strategies import rc_cr_threshold_no_condition2
-
-from sky_spot.strategies import multi_region_rc_cr_threshold_optimized

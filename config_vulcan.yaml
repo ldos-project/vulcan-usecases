@@ -1,0 +1,167 @@
+log_level: "INFO"
+
+# The initial C++ seed program containing both RANK and VALUE policies.
+initial_program_path: vulcan/base_policy.cpp
+evaluation_target_program_path: vulcan/base_policy.cpp
+
+# Program language and file suffix for OpenEvolve temp files
+language: cpp
+file_suffix: ".cpp"
+
+# Evolution mode
+diff_based_evolution: false
+
+# LLM configuration — routed through LiteLLM proxy to AWS Bedrock.
+llm:
+  models:
+    - name: "claude-sonnet"
+      weight: 0.8
+      api_base: "http://localhost:4000"
+      api_key: "sk-1234"
+
+    - name: "claude-opus"
+      weight: 0.2
+      api_base: "http://localhost:4000"
+      api_key: "sk-1234"
+  temperature: 0.9
+  max_tokens: 32000
+  timeout: 600
+
+prompt:
+  system_message: |-
+    You are designing a multi-region cloud scheduling strategy that must finish D seconds
+    of work before a deadline T. SPOT is cheap but can be evicted; On-Demand is expensive
+    but reliable. The task can run in any of N regions. Every region switch costs d seconds
+    of restart overhead during which no progress happens.
+
+    ---
+
+    ## Information model
+
+    Each tick you observe spot availability for the CURRENT region only. To learn
+    about other regions you must visit them — switch there and spend a tick. This
+    means region knowledge is cached and stale for unvisited regions.
+
+    ## Architecture: VALUE-first, RANK-on-switch
+
+    Your EVOLVE block configures TWO libvulcan policies in a single function:
+
+    **VALUE policy** — "What action this tick?"
+    Reads urgency features for the current region and decides:
+    - SPOT (1): use spot in current region (if available; falls back to ON_DEMAND if not)
+    - ON_DEMAND (2): use on-demand in current region
+    - CHANGE_REGION (0): switch to a different region (triggers RANK)
+
+    **RANK policy** — "Which region to switch to?"
+    Only fires when VALUE returns CHANGE_REGION. Scores all regions using cached
+    per-object observations. Only the current region's features are updated each tick;
+    unvisited regions retain stale listener state (natural caching). Use staleness
+    from `r_last_visit_tick` to give exploration bonuses to unvisited regions.
+
+    ---
+
+    ## RANK Policy API
+
+    Pre-declared feature handles (prefix `r_`, all per-object):
+
+    | Handle              | Type | Meaning                                           |
+    |---------------------|------|---------------------------------------------------|
+    | `r_has_spot`        | i64  | 1 if spot was available when this region was last visited |
+    | `r_last_visit_tick` | i64  | tick number when this region was last visited      |
+
+    You must:
+    1. Attach listeners to feature handles (see Listener API below).
+    2. Set `rank_config.set_scoring_fn(...)` — a lambda `(const vulcan::feature_store& fs, int64_t obj_id) -> double`.
+       Higher score = more desirable region. Comparator and sorting are fixed (not evolved).
+
+    Per-object listener API (attach with `rank_config.add_listeners(handle, {...})`):
+      vulcan::listeners::object::RollingWindow(int N)
+        → fs.get_latest(h, obj_id), fs.get_kth_recent(h, obj_id, k), fs.get_avg(h, obj_id)
+      vulcan::listeners::object::RollingCount(int N)
+        → fs.get_count(h, obj_id, int64_t val)
+      vulcan::listeners::object::EWMA({alpha1, alpha2, ...})
+        → fs.get_ewma(h, obj_id, alpha)
+      vulcan::listeners::object::MinMax()
+        → fs.get_max(h, obj_id), fs.get_min(h, obj_id)
+
+    ---
+
+    ## VALUE Policy API
+
+    Pre-declared feature handles (prefix `v_`, all global):
+
+    | Handle               | Type | Meaning                                    |
+    |----------------------|------|--------------------------------------------|
+    | `v_elapsed`          | f64  | seconds since task start                   |
+    | `v_progress`         | f64  | seconds of work completed                  |
+    | `v_has_spot`         | i64  | 1 if spot available in CURRENT region      |
+    | `v_last_cluster_type`| i64  | 0=CHANGE_REGION, 1=SPOT, 2=ON_DEMAND      |
+
+    Constants are available as macros (VALUE policy only, not usable in RANK):
+    `DEADLINE`, `DURATION`, `RESTART_OVERHEAD`, `GAP`, `NUM_REGIONS`.
+
+    You must:
+    1. Attach listeners to feature handles.
+    2. Set `value_config.set_value_fn(...)` — a lambda `(const vulcan::feature_store& fs) -> double`.
+       Return: CHANGE_REGION (0), SPOT (1), ON_DEMAND (2).
+
+    Global listener API (attach with `value_config.add_listeners(handle, {...})`):
+      vulcan::listeners::global::RollingWindow(int N)
+        → fs.get_latest(h), fs.get_kth_recent(h, k), fs.get_avg(h)
+      vulcan::listeners::global::MinMax()
+        → fs.get_max(h), fs.get_min(h)
+      vulcan::listeners::global::EWMA({alpha1, alpha2, ...})
+        → fs.get_ewma(h, alpha)
+      vulcan::listeners::global::RollingCount(int N)
+        → fs.get_count(h, int64_t val), fs.contains(h, int64_t val)
+
+    ---
+
+    ## Key Intuitions
+
+    **RANK scoring**: Unvisited regions should get exploration bonuses (check
+    `r_last_visit_tick`). Among visited regions, use EWMA/rolling stats on
+    `r_has_spot` to estimate availability — a region that is frequently available
+    is more desirable. Stale observations should be discounted.
+
+    **VALUE decision**: The core tension is cost vs. safety vs. exploration.
+    - Tick-aligned safety: `left_ticks = floor((T-t)/GAP)`, `need1d = ceil(((D-p)+d)/GAP)`.
+      If `need1d >= left_ticks`, must use ON_DEMAND.
+    - When `v_has_spot` is 1 and urgency is low, prefer SPOT.
+    - When spot is unavailable and urgency is low, CHANGE_REGION to explore.
+    - When spot is unavailable and urgency is moderate-high, ON_DEMAND.
+    - Every CHANGE_REGION costs a tick of no progress + migration overhead,
+      so avoid excessive exploration when behind schedule.
+
+    **The `_apply_strong_guarantee` override**: A hidden safety net forces ON_DEMAND
+    when `remaining_task_time >= remaining_time`. Smart strategies avoid triggering
+    this by proactively switching to ON_DEMAND before the deadline pressure is critical.
+
+    Return value macros: `CHANGE_REGION` (0), `SPOT` (1), `ON_DEMAND` (2).
+
+    ---
+
+    ## Output Format
+
+    Emit the complete EVOLVE block contents with EVOLVE-BLOCK START / EVOLVE-BLOCK END markers.
+    The block must configure BOTH policies (rank listeners + scoring_fn, value listeners + value_fn).
+
+database:
+  population_size: 80
+  archive_size: 30
+  num_islands: 4
+  elite_selection_ratio: 0.1
+  exploitation_ratio: 0.5
+
+evaluator:
+  parallel_evaluations: 1
+  timeout: 300
+  enable_artifacts: true
+  use_llm_feedback: false
+  cascade_evaluation: true
+  cascade_thresholds: [1.0, 0.5]
+
+# Evolution settings
+max_iterations: 100
+checkpoint_interval: 10
+max_code_length: 60000

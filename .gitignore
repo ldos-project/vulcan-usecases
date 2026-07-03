@@ -1,0 +1,9 @@
+results/
+simulator/data/
+*.json
+*.txt
+*.tsv
+
+**/__pycache__/
+*.so
+*.ovulcan/LLMCode.h

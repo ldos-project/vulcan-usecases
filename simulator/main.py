@@ -4,6 +4,7 @@ import logging
 import os
 import sys
 import yaml
+os.environ.setdefault('WANDB_MODE', 'disabled')
 import wandb
 import re
 from collections import defaultdict

@@ -7,21 +7,26 @@ evaluation_target_program_path: openevolve_multi_region_strategy/initial_program
 
 # The language of the program to be evolved.
 language: python
+file_suffix: ".py"
 
 # This is a top-level setting that controls the evolution mechanism.
 diff_based_evolution: false
 
-# LLM Configuration
+# LLM Configuration — routed through LiteLLM proxy to AWS Bedrock.
 llm:
   models:
-    - name: "gemini-2.5-pro"
-      weight: 1.0  # Lower weight for the conservative model
-      api_base: "https://generativelanguage.googleapis.com/v1beta/openai/"
-      api_key: ${GEMINI_API_KEY}
-  temperature: 0.75  # Increased temperature for more creativity
-  top_p: 0.95
+    - name: "claude-sonnet"
+      weight: 0.8
+      api_base: "http://localhost:4000"
+      api_key: "sk-1234"
+
+    - name: "claude-opus"
+      weight: 0.2
+      api_base: "http://localhost:4000"
+      api_key: "sk-1234"
+  temperature: 0.9
   max_tokens: 32000
-  timeout: 300
+  timeout: 600
 
 prompt:
   system_message: |-
@@ -105,21 +110,12 @@ evaluator:
   timeout: 300 # 5 minutes per evaluation
   enable_artifacts: true
   use_llm_feedback: false
-  # Cascade evaluation divides the evaluation into multiple stages.
-  # A program only proceeds to the next stage if it passes the current one.
-  # This is highly effective for quickly filtering out non-viable programs.
-  cascade_evaluation:
-    # A list of functions in the evaluator file to be called in sequence.
-    # Each function represents a stage.
-    stages:
-      - "evaluate_stage1"  # Quick syntax and basic runtime check
-      - "evaluate_stage2"  # Full, comprehensive evaluation
-    # The metric from the stage's return dictionary that must be > 0 to pass.
-    # For stage 1, we will return `{'runs_successfully': 1.0}` on success.
-    pass_metric: "runs_successfully"
+  # Cascade evaluation: evaluate_stage1 (quick runtime check) then evaluate_stage2 (full).
+  cascade_evaluation: true
+  cascade_thresholds: [1.0, 0.5]
 
 
 # Evolution settings
-max_iterations: 300 # Increased from 100
+max_iterations: 100
 checkpoint_interval: 10
 max_code_length: 60000

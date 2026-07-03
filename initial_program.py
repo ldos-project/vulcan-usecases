@@ -1,9 +1,7 @@
 # EVOLVE-BLOCK-START
 
 import configargparse
-import json
 import logging
-import math
 import typing
 
 from sky_spot.strategies.multi_strategy import MultiRegionStrategy
