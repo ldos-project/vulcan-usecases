@@ -4,3 +4,4 @@ This repo contains the code to reproduce the results of the case studies in [our
 * Single-region Spot VM scheduling: `cbl-artifact`
 * Multi-region Spot VM scheduling: `cbl-multi-artifact`
 * Caching policies: `caching-artifact`
+* TIering policies: `tiering-artifact`
