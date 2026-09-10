@@ -1,7 +1,8 @@
 [submodule "tiering_solutions"]
 	path = tiering_solutions
-	url = git@github.com:SujayYadalam94/tiering_solutions.git
+	url = https://github.com/SujayYadalam94/tiering_solutions.git
+	branch = vulcan-artifact
 [submodule "anvil"]
 	path = anvil
-	url = git@github.com:ldos-project/anvil.git
-	branch = rohit
+	url = https://github.com/ldos-project/anvil.git
+	branch = vulcan

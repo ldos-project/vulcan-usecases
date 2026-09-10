@@ -41,12 +41,10 @@ for i in "${!HOSTS[@]}"; do
   host=${HOSTS[$i]}
   echo "Setting up on $host ..."
   ssh -o StrictHostKeyChecking=no $host "tmux new-session -d -s setup \"
-    git clone https://github.com/SujayYadalam94/tiering_solutions.git --branch sujay/vulcan &&
+    git clone https://github.com/SujayYadalam94/tiering_solutions.git --branch vulcan-artifact &&
     pushd tiering_solutions &&
-    git checkout sujay/vulcan &&
     git submodule update --init src/libvulcan/ &&
-    rm -r linux &&
-    ln -s /usr/local/hemem/linux linux &&
+    ln -sfn /usr/local/hemem/linux linux &&
     popd
     \""
 done
