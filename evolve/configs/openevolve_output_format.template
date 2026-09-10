@@ -1,0 +1,6 @@
+--- Expected Output for Scoring Function ---
+0. Brainstorm on the scoring function you are designing, and then think about what listeners you'd need to implement your idea.
+
+1. Listener configuration — attach listeners to each feature you want to use.
+
+2. Scoring function — this IS your heuristic. Called once per candidate, returns a scalar. For every new numeric literal you introduce within the heuristic, include a brief inline comment the first time it appears justifying it in terms of statistical meaning or domain semantics (e.g., // EWMA alpha: forgets ~half of weight after 23 steps or // p50: normalization anchor).

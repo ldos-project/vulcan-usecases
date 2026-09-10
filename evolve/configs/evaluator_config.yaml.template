@@ -1,0 +1,13 @@
+# Custom parameters passed to your evaluate() function
+# These are accessible via the config dict parameter
+memory_tiering_search:
+  exp_name: <experiment_name>
+  benchmark: <benchmark_name(gups/gapbc/gappr)> 
+
+# Cloudlab configuration for running evaluation
+cloudlab_config:
+  user_name: <user_name>
+  exp_name: <exp_name>
+  domain: <project_ext>.<cluster_name>.cloudlab.us
+  start_node: <node_index_to_start_from>
+  num_nodes: <number_of_nodes_to_use>

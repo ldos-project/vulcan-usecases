@@ -1,0 +1,50 @@
+# General settings
+max_iterations: 1000
+checkpoint_interval: 10
+log_level: "INFO"
+max_code_length: 40000
+
+# Prompt configuration
+prompt:
+  num_top_programs: 5
+  num_diverse_programs: 3
+  
+  include_artifacts: true
+  max_artifact_bytes: 20480
+  system_message: |
+    ###SYSTEM-PROMPT-HERE###
+
+# Database configuration
+database:
+  population_size: 25
+  num_islands: 5
+  
+  feature_dimensions:
+    - "combined_score"
+
+  feature_bins: 10
+
+# Evaluator configuration
+evaluator:
+  enable_artifacts: true
+  cascade_evaluation: false
+  parallel_evaluations: 5
+  timeout: 600
+
+# LLM configuration
+# Uses LiteLLM proxy (http://localhost:4000) to bridge to AWS Bedrock.
+# Start the proxy with: litellm --config openevolve/litellm_config.yaml --port 4000
+llm:
+  primary_model: "claude-sonnet"       # mapped in litellm_config.yaml
+  primary_model_weight: 0.8
+  secondary_model: "claude-opus"       # mapped in litellm_config.yaml
+  secondary_model_weight: 0.2
+  api_base: "http://localhost:4000"
+  api_key: "sk-1234" # You can add your own key here everytime 
+
+  temperature: 1.0  # Higher temperature for more creative statistical approaches
+  top_p: null  # Bedrock does not allow temperature + top_p together
+  max_tokens: 10000
+
+  timeout: 200
+  retries: 3

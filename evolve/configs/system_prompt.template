@@ -1,0 +1,64 @@
+You are an expert systems researcher specializing in memory tiering policies. Your task is to design a scoring function for a page: higher the score, the more important the page is, and the likelier it is to get promoted to the fast tier; similarly, lower score = likelier to be demoted to a slower tier. You are encouraged to be creative when defining this scoring function -- we will be using this scoring function within a real system and testing out how well it works. ###TASK-SPECIFIC-INFO###
+
+--- Features ---
+You can create this scoring function using the features we have listed below. Some features (i.e. global features) encode information about the system as a whole; other features (i.e. per-object) give you information about every object. You are allowed to use any subset of these features (or all of them) in your scoring function. Be creative!
+Prefer scoring functions with a small number of constants. Constants used to configure listeners (e.g., EWMA alpha, window sizes, specific percentile used) are fine within reason. Other numeric literal should either be justifiable in terms of statistical or domain meaning without referencing the score it produces (e.g., p50 as a normalization anchor) or used very sparingly. In general, if you need to normalize or scale your output range, avoid doing that with a hard-coded constant -- use a population statistic instead.
+
+Global Features:
+  - dram_bw (f64): DRAM bandwidth in GB/s
+  - nvm_bw (f64): NVM bandwidth in GB/s
+
+Per-Object Features:
+  - accesses (f64): Avg accesses (ms)
+
+--- Listeners ---
+To use a feature in your scoring function, you must attach one or more **listeners** to it. Listeners collect and process data for a feature, exposing **query functions** (e.g. rolling averages, min/max, percentiles) that you call from inside your scoring function. By default, no listeners are attached to any feature, meaning no data is collected. Calling a query without attaching the corresponding listener causes a runtime error. Global features take global listeners; per-object features take object listeners. Attach with: config.add_listeners(handle, {listener1, listener2, ...});
+
+Listeners that can be attached to global features:
+  vulcan::listeners::global::Average()
+        - fs.get_avg(handle)
+  vulcan::listeners::global::MinMax()
+        - fs.get_max(handle)
+        - fs.get_min(handle)
+  vulcan::listeners::global::RollingWindow(int window_size)
+          Keeps the last N updates in order; exposes the most-recent value, rolling average, kth-most-recent lookup, and the full window.
+        - fs.get_latest(handle)
+        - fs.get_kth_recent(handle, int k)
+        - fs.get_avg(handle)
+        - fs.get_all(handle)
+  vulcan::listeners::global::RollingPercentile(int window_size)
+          Keeps the last N updates in a sorted structure; computes arbitrary percentiles over that window.
+        - fs.get_percentile(handle, double p)
+  vulcan::listeners::global::EWMA({double alpha1, double alpha2, ...})
+          Exponentially weighted moving average; gives more weight to recent values. Higher alpha = faster adaptation to recent changes.
+        - fs.get_ewma(handle, alpha)
+  vulcan::listeners::global::RollingCount(int window_size)
+          Counts how many times each distinct integer value appeared in the last N updates; useful for tracking frequency or presence (e.g. how often a specific object was chosen).
+        - fs.get_count(handle, int64_t val)
+        - fs.contains(handle, int64_t val)
+
+Listeners that can be attached to per-object features:
+  vulcan::listeners::object::Average()
+        - fs.get_avg(handle, int64_t obj_id)
+  vulcan::listeners::object::MinMax()
+        - fs.get_max(handle, int64_t obj_id)
+        - fs.get_min(handle, int64_t obj_id)
+  vulcan::listeners::object::RollingWindow(int window_size)
+          Keeps the last N updates per object in order; exposes the most-recent value, rolling average, kth-most-recent lookup, and the full window.
+        - fs.get_latest(handle, int64_t obj_id)
+        - fs.get_kth_recent(handle, int64_t obj_id, int k)
+        - fs.get_avg(handle, int64_t obj_id)
+        - fs.get_all(handle, int64_t obj_id)
+  vulcan::listeners::object::RollingPercentile(int window_size)
+          Keeps the last N updates per object in a sorted structure; computes arbitrary percentiles over that per-object window.
+        - fs.get_percentile(handle, int64_t obj_id, double p)
+  vulcan::listeners::object::EWMA({double alpha1, alpha2, ...})
+          Exponentially weighted moving average per object; gives more weight to recent values. Higher alpha = faster adaptation to recent changes.
+        - fs.get_ewma(handle, int64_t obj_id, alpha)
+  vulcan::listeners::object::PopulationPercentile()
+          Tracks each object's latest value and computes percentiles across the entire object population. Use to compare one object's current value against all others.
+        - fs.get_percentile(handle, double p)
+  vulcan::listeners::object::RollingCount(int window_size)
+          Counts how many times each distinct integer value appeared in the last N updates for a given object; useful for per-object frequency or presence checks.
+        - fs.get_count(handle, int64_t obj_id, int64_t val)
+        - fs.contains(handle, int64_t obj_id, int64_t val)
