@@ -15,7 +15,7 @@ uv pip install pymongo matplotlib numpy pandas openevolve shinka-evolve 'litellm
 # Install system dependencies and build libCacheSim
 bash setup_experiment.sh
 
-# Build the Anvil safety-gate binary once (requires ocaml + dune + menhir + z3; see anvil/README.md).
+# Build the Anvil safety-gate binary once (requires ocaml + dune >= 3.21 + menhir + z3; see anvil/README.md).
 # You can skip this step until you plan to run the search with --use_anvil.
 (cd anvil && dune build ./bin/main.exe)
 ```
@@ -24,7 +24,7 @@ You will also need a running MongoDB instance (default: `mongodb://localhost:270
 
 # Reproducing plots
 ## From precomputed results
-1. Download `caching_results.tar.gz` from [our Zenodo repo for this paper](https://doi.org/10.5281/zenodo.20361338), and extract it into the current directory:
+1. Download `caching_results.tar.gz` from [our Zenodo repo for this paper](https://doi.org/10.5281/zenodo.20361337), and extract it into the current directory:
    ```bash
    tar xzvf caching_results.tar.gz
    ```
@@ -51,6 +51,27 @@ You will also need a running MongoDB instance (default: `mongodb://localhost:270
    python3 plots/plot_workload_instances.py --cache-size 0.001 --ignore-size --plot
    ```
 
+4. Check the headline numbers quoted in §7.2 ("Overall results" and "Impact of
+   removing listeners"). This buckets all 32 instances — 8 traces x {10%, 0.1%}
+   cache x {size-aware, no-size} — by how Vulcan compares to the best of the
+   seven baselines on that instance:
+   ```bash
+   python3 plots/get_instance_aggregate.py
+   ```
+   The paper's claims correspond to these rows:
+
+   | §7.2 sentence | Expected output |
+   | --- | --- |
+   | "outperform *all* baselines on 6 instances" | `Vulcan` → `better  6` |
+   | "within 5% of the best on 13 more" | `Vulcan` → `within-5%  13` |
+   | "an additional four ... within 10% of the best" | `Vulcan` → `within-10%  4` |
+   | "Vulcan-NoListener still outperforms all baselines on 7 instances" | `Vulcan-NoListener` → `better  7` |
+   | "trails full Vulcan by 0.83% average MRR" | `Improvement of Vulcan over Vulcan-NoListener: mean +0.83%` |
+
+   Add `--detail` to see which instance landed in which bucket. To check the
+   same numbers against data you regenerated yourself, pass `--reproduce` (see
+   the next section).
+
 
 ## Rerun identified heuristics
 To independently rerun all results (baselines + evolved heuristics) on full traces:
@@ -65,6 +86,12 @@ python3 plots/plot_workload_instances.py --cache-size 0.1 --plot --reproduce
 python3 plots/plot_workload_instances.py --cache-size 0.001 --plot --reproduce
 python3 plots/plot_workload_instances.py --cache-size 0.1 --ignore-size --plot --reproduce
 python3 plots/plot_workload_instances.py --cache-size 0.001 --ignore-size --plot --reproduce
+```
+
+4. Re-check the §7.2 headline numbers against your own data, using the same
+   claim-to-output table as step 4 above:
+```bash
+python3 plots/get_instance_aggregate.py --reproduce
 ```
 
 # Running the search yourself

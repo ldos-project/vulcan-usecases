@@ -5,7 +5,7 @@ workload instances.
 
 An "instance" is a (trace, cache_size, size-mode) triple. For the TRACES list in
 plot_workload_instances.py, cache sizes {0.1, 0.001}, and size-modes
-{size, nosize}, we expect 10 * 2 * 2 = 40 instances (a few may be missing).
+{size, nosize}, that is 8 * 2 * 2 = 32 instances -- the count quoted in §7.2.
 
 For each instance we bucket Vulcan into one of:
   - better: strictly beats every baseline
@@ -17,7 +17,10 @@ report:
   - gap_pct     = (vulcan - oracle) / oracle * 100
   - mrr_recovered = (fifo - vulcan) / (fifo - oracle)   (1.0 == optimal)
 
-Usage: python3 get_instance_aggregate.py [--oracle]
+Usage: python3 get_instance_aggregate.py [--detail] [--oracle] [--reproduce]
+
+Pass --reproduce to read the REPRODUCED_* databases written by evaluate_all.py
+instead of the originals restored from the Zenodo dump.
 """
 import argparse
 import pymongo
@@ -78,6 +81,9 @@ def main():
                     help="Also analyze Vulcan vs the Belady/BeladySize oracle.")
     ap.add_argument("--detail", action="store_true",
                     help="Print the per-instance detail table for each variant.")
+    ap.add_argument("--reproduce", action="store_true", default=False,
+                    help="Use the REPRODUCED_* databases written by evaluate_all.py "
+                         "instead of the originals restored from Zenodo.")
     args = ap.parse_args()
 
     client = pymongo.MongoClient(MONGO)
@@ -87,8 +93,8 @@ def main():
         if cache_size not in VULCAN_COLLECTIONS:
             continue
         for ignore_size in SIZE_MODES:
-            tbl, _ = fetch_baselines(client, cache_size, ignore_size)
-            vulcan_all = fetch_vulcan(client, cache_size, ignore_size)
+            tbl, _ = fetch_baselines(client, cache_size, ignore_size, args.reproduce)
+            vulcan_all = fetch_vulcan(client, cache_size, ignore_size, args.reproduce)
             fetched[(cache_size, ignore_size)] = (tbl, vulcan_all)
 
     per_variant_results = {}
