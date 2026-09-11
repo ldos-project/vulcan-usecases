@@ -24,8 +24,9 @@ You will also need a running MongoDB instance (default: `mongodb://localhost:270
 
 # Reproducing plots
 ## From precomputed results
-1. Download `caching_results.tar.gz` from [our Zenodo repo for this paper](https://doi.org/10.5281/zenodo.20361337), and extract it into the current directory:
+1. Download `caching_results.tar.gz` from [our Zenodo repo for this paper](https://doi.org/10.5281/zenodo.20361337), check that it downloaded intact, and extract it into the current directory:
    ```bash
+   md5sum caching_results.tar.gz   # expect: 40cd15e91cf1d878643b05492589fc14
    tar xzvf caching_results.tar.gz
    ```
    This produces four MongoDB dump directories: `Baselines_size/`, `Baselines_nosize/`, `ChunkedTraces_size/`, and `ChunkedTraces_nosize/`.
@@ -93,6 +94,24 @@ python3 plots/plot_workload_instances.py --cache-size 0.001 --ignore-size --plot
 ```bash
 python3 plots/get_instance_aggregate.py --reproduce
 ```
+
+5. Confirm your reproduced data matches our precomputed results stored in the tarball: 
+```bash
+python3 plots/verify_reproduction.py
+```
+
+Expected output:
+
+```
+Compared 288 cells at tol=0.0005
+  OK            288
+
+RESULT: MATCH
+```
+
+Any cell that differs, or that exists in one set of databases but not the other, is
+listed with both values and the script exits nonzero. Pass `--verbose` to print all
+288 cells including the matching ones, or `--tol` to change the tolerance.
 
 # Running the search yourself
 ## Download chunked traces
