@@ -240,41 +240,82 @@ def plot_mrr_markers(tbl, sizes, vulcan, cache_size, outpath, plot_algos):
 
     # +0.31in over the original height makes room for the 3rd legend row so the
     # plotted area stays the size it had with the original 2-row legend.
-    plt.figure(figsize=(8.5, max(3.5, 1.5 + n_groups * 0.3) + 0.31))
+    fig = plt.figure(figsize=(8.5, max(3.5, 1.5 + n_groups * 0.3) + 0.31))
     plt.rcParams.update({"font.size": 18})
 
-    for j in range(n_groups):
-        if j % 2 == 0:
-            plt.axhspan(j - 0.5, j + 0.5, color="lightgrey", alpha=0.25, zorder=0)
+    def draw(ax):
+        """Draw the alternating row shading and every algo's markers on one axes."""
+        for j in range(n_groups):
+            if j % 2 == 0:
+                ax.axhspan(j - 0.5, j + 0.5, color="lightgrey", alpha=0.25, zorder=0)
+        hs = {}
+        for algo in plot_algos:
+            values = [mrr(t, algo) for t in traces]
+            ys = [y[j] for j, v in enumerate(values) if v is not None]
+            xs = [v for v in values if v is not None]
+            is_vulcan = algo in VULCAN_VARIANTS
+            hs[algo] = ax.scatter(
+                xs, ys,
+                marker=ALGO_MARKERS.get(algo, "o"),
+                color=ALGO_COLORS.get(algo, "lightgrey"),
+                edgecolor="black", linewidth=0.8,
+                s=380 if is_vulcan else 180, alpha=0.7,
+                label=DISPLAY.get(algo, algo), zorder=5 if is_vulcan else 3,
+            )
+        ax.axvline(x=0, color="black", linestyle="-", linewidth=0.8, alpha=0.4)
+        ax.grid(axis="x", linestyle="--", alpha=0.5)
+        ax.set_ylim(-0.5, n_groups - 0.5)
+        return hs
 
-    handles = {}
-    for algo in plot_algos:
-        values = [mrr(t, algo) for t in traces]
-        ys = [y[j] for j, v in enumerate(values) if v is not None]
-        xs = [v for v in values if v is not None]
-        is_vulcan = algo in VULCAN_VARIANTS
-        size = 380 if is_vulcan else 180
-        zorder = 5 if is_vulcan else 3
-        handles[algo] = plt.scatter(
-            xs, ys,
-            marker=ALGO_MARKERS.get(algo, "o"),
-            color=ALGO_COLORS.get(algo, "lightgrey"),
-            edgecolor="black", linewidth=0.8,
-            s=size, alpha=0.7, label=DISPLAY.get(algo, algo), zorder=zorder,
-        )
+    # A single far-negative point (e.g. LRB collapsing on a trace) otherwise
+    # stretches the x-axis and leaves a large empty band. Detect such points by
+    # the gap that separates them from the bulk; when present, split the x-axis
+    # into a narrow panel for the outliers and a wide panel for the bulk, joined
+    # by diagonal break marks.
+    all_x = [mrr(t, a) for a in plot_algos for t in traces if mrr(t, a) is not None]
+    xs_sorted = sorted(all_x)
+    xmax, span = xs_sorted[-1], xs_sorted[-1] - xs_sorted[0]
+    left_clip = xs_sorted[0]
+    for i in range(1, len(xs_sorted)):
+        if xs_sorted[i - 1] < 0 and xs_sorted[i] - xs_sorted[i - 1] > 0.15 * span:
+            left_clip = xs_sorted[i]
+        else:
+            break
+    off_x = [v for v in all_x if v < left_clip]
 
-    plt.axvline(x=0, color="black", linestyle="-", linewidth=0.8, alpha=0.4)
-    plt.grid(axis="x", linestyle="--", alpha=0.5)
-    plt.ylim(-0.5, n_groups - 0.5)
-    plt.yticks(y, trace_labels, fontsize=14)
-    plt.ylabel("Trace", fontsize=20)
-    plt.xlabel("Miss Ratio Reduction from FIFO", fontsize=20)
+    if off_x:
+        omin, omax, w = min(off_x), max(off_x), xmax - left_clip
+        gs = fig.add_gridspec(1, 2, width_ratios=[1, 7], wspace=0.05)
+        axL = fig.add_subplot(gs[0])
+        axR = fig.add_subplot(gs[1], sharey=axL)
+        draw(axL)
+        handles = draw(axR)
+        axL.set_xlim(omin - 0.06 * w, omax + 0.06 * w)
+        axR.set_xlim(left_clip - 0.03 * w, xmax + 0.03 * w)
+        axL.set_xticks(sorted({round(v, 2) for v in off_x}))
+        axL.spines["right"].set_visible(False)
+        axR.spines["left"].set_visible(False)
+        axR.tick_params(axis="y", length=0)
+        plt.setp(axR.get_yticklabels(), visible=False)
+        axL.set_yticks(y)
+        axL.set_yticklabels(trace_labels, fontsize=14)
+        axL.set_ylabel("Trace", fontsize=20)
+        main_ax, broken_axes = axR, (axL, axR)
+    else:
+        ax = fig.add_subplot(111)
+        handles = draw(ax)
+        ax.set_yticks(y)
+        ax.set_yticklabels(trace_labels, fontsize=14)
+        ax.set_ylabel("Trace", fontsize=20)
+        ax.set_xlabel("Miss Ratio Reduction from FIFO", fontsize=20)
+        main_ax, broken_axes = ax, None
 
-    # 3-row legend with the partial last row centred as its own group. A single
-    # uniform grid can't centre an odd remainder, so the full rows and the
-    # remainder go in two stacked legends. A temporary full legend lets
-    # tight_layout reserve the band; the two real legends are then placed into
-    # it using stable figure coordinates.
+    # 3-row legend with the partial last row centred as its own group. Measure
+    # the height a full 3-row legend needs, reserve that band at the top, then
+    # place the full rows and the centred remainder as two stacked legends in
+    # figure coordinates inside it. The broken-axis figure is positioned by hand
+    # (tight_layout can't handle the two-panel gridspec); the single axes keeps
+    # tight_layout and is simply shrunk from the top to free the band.
     n_algos = len(plot_algos)
     ncol = -(-n_algos // 3)
     n_leg_rows = -(-n_algos // ncol)
@@ -284,28 +325,51 @@ def plot_mrr_markers(tbl, sizes, vulcan, cache_size, outpath, plot_algos):
     cx = 0.35
     leg_kw = dict(fontsize=16, loc="lower center", frameon=False)
 
-    fig, ax = plt.gcf(), plt.gca()
-    if not full_algos or len(rem_algos) == ncol:
-        # last row is full (or only one row) -> a single legend already centres
-        ax.legend([handles[a] for a in plot_algos], lbls(plot_algos),
-                  ncol=ncol, bbox_to_anchor=(cx, 1.0), **leg_kw)
-        plt.tight_layout()
+    tmp = main_ax.legend([handles[a] for a in plot_algos], lbls(plot_algos),
+                         ncol=ncol, bbox_to_anchor=(0.5, 1.0),
+                         bbox_transform=fig.transFigure, **leg_kw)
+    fig.canvas.draw()
+    band = tmp.get_window_extent().transformed(fig.transFigure.inverted()).height
+    row_h = band / n_leg_rows
+    tmp.remove()
+
+    gap = 0.012
+    if broken_axes is not None:
+        axL, axR = broken_axes
+        L, R, B = 0.16, 0.985, 0.16
+        panel_top = 1 - band - gap
+        H, W, wgap = panel_top - B, R - 0.16, 0.02
+        wL = (W - wgap) / 15
+        axL.set_position([L, B, wL, H])
+        axR.set_position([L + wL + wgap, B, W - wL - wgap, H])
+        fig.text((L + R) / 2, 0.045, "Miss Ratio Reduction from FIFO",
+                 ha="center", va="center", fontsize=20)
+        rx0, rx1, top = L, R, panel_top + gap
     else:
-        tmp = ax.legend([handles[a] for a in plot_algos], lbls(plot_algos),
-                        ncol=ncol, bbox_to_anchor=(cx, 1.0), **leg_kw)
         plt.tight_layout()
-        fig.canvas.draw()
-        tb = tmp.get_window_extent().transformed(fig.transFigure.inverted())
-        row_h = tb.height / n_leg_rows
-        tmp.remove()
-        apos = ax.get_position()
-        cx_fig, top = apos.x0 + cx * apos.width, tb.y0
-        fkw = dict(bbox_transform=fig.transFigure, **leg_kw)
-        leg_rem = ax.legend([handles[a] for a in rem_algos], lbls(rem_algos),
-                            ncol=len(rem_algos), bbox_to_anchor=(cx_fig, top), **fkw)
-        ax.add_artist(leg_rem)
-        ax.legend([handles[a] for a in full_algos], lbls(full_algos),
-                  ncol=ncol, bbox_to_anchor=(cx_fig, top + row_h), **fkw)
+        p = main_ax.get_position()
+        main_ax.set_position([p.x0, p.y0, p.width, p.height - band - gap])
+        rx0, rx1, top = p.x0, p.x1, main_ax.get_position().y1 + gap
+    cx_fig = rx0 + cx * (rx1 - rx0)
+    fkw = dict(bbox_transform=fig.transFigure, **leg_kw)
+    if not full_algos or len(rem_algos) == ncol:
+        main_ax.legend([handles[a] for a in plot_algos], lbls(plot_algos),
+                       ncol=ncol, bbox_to_anchor=(cx_fig, top), **fkw)
+    else:
+        leg_rem = main_ax.legend([handles[a] for a in rem_algos], lbls(rem_algos),
+                                 ncol=len(rem_algos), bbox_to_anchor=(cx_fig, top), **fkw)
+        main_ax.add_artist(leg_rem)
+        main_ax.legend([handles[a] for a in full_algos], lbls(full_algos),
+                       ncol=ncol, bbox_to_anchor=(cx_fig, top + row_h), **fkw)
+
+    if off_x:
+        # diagonal break marks on the shared edge of the two panels
+        d = 0.5
+        mk = dict(marker=[(-1, -d), (1, d)], markersize=10, linestyle="none",
+                  color="k", mec="k", mew=1, clip_on=False)
+        axL.plot([1, 1], [0, 1], transform=axL.transAxes, **mk)
+        axR.plot([0, 0], [0, 1], transform=axR.transAxes, **mk)
+
     os.makedirs(os.path.dirname(outpath) or ".", exist_ok=True)
     plt.savefig(outpath, dpi=200, bbox_inches="tight")
     pdf_path = os.path.splitext(outpath)[0] + ".pdf"
