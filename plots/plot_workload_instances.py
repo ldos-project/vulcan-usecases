@@ -1,12 +1,6 @@
 #!/usr/bin/env python3
 """
 Compare baseline cache algorithms vs Vulcan on the w* traces (instances of different workloads).
-
-Pulls baseline miss ratios from Baselines_size.baselines_percent and Vulcan
-results from ChunkedTraces_size.instance_evaluations-<pct>pct (best entry per
-trace root; 10.0pct == cache size 0.1, 0.1pct == cache size 0.001).
-
-Usage: python3 compare_baselines.py --cache-size 0.1
 """
 import argparse
 import os
@@ -20,17 +14,15 @@ MONGO = "mongodb://localhost:27017/"
 TRACES = [
     "wMSR.oracleGeneral.bin.zst",
     "wMetaCDN.oracleGeneral.bin.zst",
-    # "wMetaKV.oracleGeneral.bin.zst",
     "wMetaKVCache.oracleGeneral.bin.zst",
     "wMetaStorage.oracleGeneral.bin.zst",
     "wTencent.oracleGeneral.bin.zst",
-    # "wTwemCache.oracleGeneral.bin.zst",
     "wTwemCacheCluster50.oracleGeneral.bin.zst",
     "wTwemCacheCluster53.oracleGeneral.bin.zst",
     "wWikiMedia.oracleGeneral.bin.zst",
 ]
-BASE_ALGOS = ["FIFO", "Cacheus", "LRU", "Sieve", "S3FIFO-0.1000-2", "LHD", "GDSF"]
-PLOT_ALGOS = ["Cacheus", "LRU", "Sieve", "S3FIFO-0.1000-2", "LHD", "GDSF", "VulcanPQEvolve", "VulcanPQEvolve-NoListener"]
+BASE_ALGOS = ["FIFO", "Cacheus", "LRU", "Sieve", "S3FIFO-0.1000-2", "LHD", "GDSF", "LeCaR", "LRB-OMR", "ThreeLCache-BMR"]
+PLOT_ALGOS = ["Cacheus", "LRU", "Sieve", "S3FIFO-0.1000-2", "LHD", "GDSF", "LeCaR", "LRB-OMR", "ThreeLCache-BMR", "VulcanPQEvolve", "VulcanPQEvolve-NoListener"]
 
 ALGO_COLORS = {
     "GDSF":            "#2E86C1",
@@ -43,22 +35,27 @@ ALGO_COLORS = {
     "BeladySize":      "#7D3C98",
     "LRU":             "#B03A2E",
     "Cacheus":         "#7D6608",
+    "LeCaR":           "#16A085",
+    "LRB-OMR":         "#E91E63",
+    "ThreeLCache-BMR": "#34495E",
 }
+
 DISPLAY = {
     "S3FIFO-0.1000-2": "S3-FIFO",
+    "LRB-OMR":         "LRB",
+    "ThreeLCache-BMR": "3L-BMR",
     "VulcanPQEvolve":  "Vulcan",
-    "VulcanPQEvolve-NoListener": "Vulcan-NoListener",
+    "VulcanPQEvolve-NoListener": "Vulcan-NL",
 }
+
 TRACE_DISPLAY = {
     "wMSR":          "MSR (Block)",
     "wMetaCDN":      "Meta (CDN)",
-    # "wMetaKV":       "Meta (KV)",
     "wMetaKVCache":  "Meta (KV)",
     "wMetaStorage":  "Meta (Block)",
     "wTencent":      "Tencent (Object)",
-    # "wTwemCache":    "Twitter (KV)",
-    "wTwemCacheCluster50": "Twitter (KV)",
-    "wTwemCacheCluster53": "Twitter (KV)",
+    "wTwemCacheCluster50": "Twitter (KV1)",
+    "wTwemCacheCluster53": "Twitter (KV2)",
     "wWikiMedia":    "WikiMedia (CDN)",
 }
 ALGO_MARKERS = {
@@ -73,6 +70,9 @@ ALGO_MARKERS = {
     "ARC":             "P",
     "LRU":             "v",
     "Cacheus":         "h",
+    "LeCaR":           "p",
+    "LRB-OMR":         ">",
+    "ThreeLCache-BMR": "<",
 }
 
 VULCAN_VARIANTS = ["VulcanPQEvolve", "VulcanPQEvolve-NoListener"]
@@ -238,13 +238,16 @@ def plot_mrr_markers(tbl, sizes, vulcan, cache_size, outpath, plot_algos):
     n_groups = len(traces)
     y = np.arange(n_groups)
 
-    plt.figure(figsize=(8.5, max(3.5, 1.5 + n_groups * 0.3)))
+    # +0.31in over the original height makes room for the 3rd legend row so the
+    # plotted area stays the size it had with the original 2-row legend.
+    plt.figure(figsize=(8.5, max(3.5, 1.5 + n_groups * 0.3) + 0.31))
     plt.rcParams.update({"font.size": 18})
 
     for j in range(n_groups):
         if j % 2 == 0:
             plt.axhspan(j - 0.5, j + 0.5, color="lightgrey", alpha=0.25, zorder=0)
 
+    handles = {}
     for algo in plot_algos:
         values = [mrr(t, algo) for t in traces]
         ys = [y[j] for j, v in enumerate(values) if v is not None]
@@ -252,7 +255,7 @@ def plot_mrr_markers(tbl, sizes, vulcan, cache_size, outpath, plot_algos):
         is_vulcan = algo in VULCAN_VARIANTS
         size = 380 if is_vulcan else 180
         zorder = 5 if is_vulcan else 3
-        plt.scatter(
+        handles[algo] = plt.scatter(
             xs, ys,
             marker=ALGO_MARKERS.get(algo, "o"),
             color=ALGO_COLORS.get(algo, "lightgrey"),
@@ -267,11 +270,42 @@ def plot_mrr_markers(tbl, sizes, vulcan, cache_size, outpath, plot_algos):
     plt.ylabel("Trace", fontsize=20)
     plt.xlabel("Miss Ratio Reduction from FIFO", fontsize=20)
 
+    # 3-row legend with the partial last row centred as its own group. A single
+    # uniform grid can't centre an odd remainder, so the full rows and the
+    # remainder go in two stacked legends. A temporary full legend lets
+    # tight_layout reserve the band; the two real legends are then placed into
+    # it using stable figure coordinates.
     n_algos = len(plot_algos)
-    plt.legend(fontsize=16, ncol=(n_algos // 2),
-               loc="lower center", bbox_to_anchor=(0.35, 1.0), frameon=False)
+    ncol = -(-n_algos // 3)
+    n_leg_rows = -(-n_algos // ncol)
+    split = ncol * (n_leg_rows - 1)
+    full_algos, rem_algos = plot_algos[:split], plot_algos[split:]
+    lbls = lambda algos: [DISPLAY.get(a, a) for a in algos]
+    cx = 0.35
+    leg_kw = dict(fontsize=16, loc="lower center", frameon=False)
 
-    plt.tight_layout()
+    fig, ax = plt.gcf(), plt.gca()
+    if not full_algos or len(rem_algos) == ncol:
+        # last row is full (or only one row) -> a single legend already centres
+        ax.legend([handles[a] for a in plot_algos], lbls(plot_algos),
+                  ncol=ncol, bbox_to_anchor=(cx, 1.0), **leg_kw)
+        plt.tight_layout()
+    else:
+        tmp = ax.legend([handles[a] for a in plot_algos], lbls(plot_algos),
+                        ncol=ncol, bbox_to_anchor=(cx, 1.0), **leg_kw)
+        plt.tight_layout()
+        fig.canvas.draw()
+        tb = tmp.get_window_extent().transformed(fig.transFigure.inverted())
+        row_h = tb.height / n_leg_rows
+        tmp.remove()
+        apos = ax.get_position()
+        cx_fig, top = apos.x0 + cx * apos.width, tb.y0
+        fkw = dict(bbox_transform=fig.transFigure, **leg_kw)
+        leg_rem = ax.legend([handles[a] for a in rem_algos], lbls(rem_algos),
+                            ncol=len(rem_algos), bbox_to_anchor=(cx_fig, top), **fkw)
+        ax.add_artist(leg_rem)
+        ax.legend([handles[a] for a in full_algos], lbls(full_algos),
+                  ncol=ncol, bbox_to_anchor=(cx_fig, top + row_h), **fkw)
     os.makedirs(os.path.dirname(outpath) or ".", exist_ok=True)
     plt.savefig(outpath, dpi=200, bbox_inches="tight")
     pdf_path = os.path.splitext(outpath)[0] + ".pdf"

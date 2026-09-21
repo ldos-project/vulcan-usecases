@@ -9,7 +9,7 @@ project(VulcanEvolveCacheSim)
 set(LIBCACHE_SIM_DIR "${CMAKE_SOURCE_DIR}/libcachesim")
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${LIBCACHE_SIM_DIR}/cmake/Modules/")
 
-set(CMAKE_BUILD_TYPE Debug)
+set(CMAKE_BUILD_TYPE Release)
 
 # Find GLib using pkg-config
 find_package(GLib "2.40" REQUIRED)
@@ -30,7 +30,8 @@ include_directories(${CMAKE_SOURCE_DIR}/libcachesim/libCacheSim/include)
 # Add the subdirectory containing libCacheSim
 set(BUILD_SHARED_LIBS ON CACHE BOOL "Build shared libs" FORCE)
 
-set(ENABLE_LRB OFF CACHE BOOL "Enable LRB algorithm" FORCE)
+set(ENABLE_LRB ON CACHE BOOL "Enable LRB algorithm" FORCE)
+set(ENABLE_3L_CACHE ON CACHE BOOL "Enable 3LCache algorithm" FORCE)
 set(ENABLE_GLCACHE OFF CACHE BOOL "Enable GLCache algorithm" FORCE)
 
 add_subdirectory(libcachesim)
@@ -48,6 +49,8 @@ target_compile_options(get_footprint.o PRIVATE -Wall -Wextra -Wshadow -Wpedantic
 add_executable(run_baselines.o src/run_baselines.cpp)
 target_link_libraries(run_baselines.o libCacheSim_shared cache_lib_c traceReader_lib m ${GLib_LIBRARY} ${ZSTD_LIBRARIES})
 target_compile_options(run_baselines.o PRIVATE -Wall -Wextra -Wshadow -Wpedantic)
+# Expose the learned-cache _init declarations (guarded by these macros in evictionAlgo.h)
+target_compile_definitions(run_baselines.o PRIVATE ENABLE_LRB=1 ENABLE_3L_CACHE=1)
 
 # Other executables removed because they do not exist
 

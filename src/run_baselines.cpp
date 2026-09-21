@@ -1,26 +1,40 @@
 #include "util.h"
+#include <vector>
+#include <cstdlib>
 
 double cache_percentage = -1.0;
 common_cache_params_t cc_params = default_common_cache_params();
+bool run_learned = false;  // set by --learned
 
 void run_baselines(reader_t *reader) {
   reset_reader(reader);
 
   auto start = std::chrono::high_resolution_clock::now();
-  const int NUM_CACHE_ALGORITHMS = 7;
-  cache_t *caches[NUM_CACHE_ALGORITHMS] = {
-      FIFO_init(cc_params, nullptr),
-      LRU_init(cc_params, nullptr),
-      Cacheus_init(cc_params, nullptr),
-      Sieve_init(cc_params, nullptr),
-      S3FIFO_init(cc_params, nullptr),
-      LHD_init(cc_params, nullptr),
-      GDSF_init(cc_params, nullptr),
-  };
-  assert(NUM_CACHE_ALGORITHMS == sizeof(caches) / sizeof(caches[0]));
+  std::vector<cache_t *> caches;
+  
+  if(run_learned) {
+    // Learned-cache baselines added after original artifact created
+    std::string lrb_params = "objective=object-miss-ratio";
+    caches.push_back(LRB_init(cc_params, lrb_params.c_str()));
+    caches.push_back(ThreeLCache_init(cc_params, nullptr));
+    caches.push_back(LeCaR_init(cc_params, nullptr));
+  }
+  else {
+    // original set of baselines used in evaluation 
+    caches.push_back(FIFO_init(cc_params, nullptr));
+    caches.push_back(LRU_init(cc_params, nullptr));
+    caches.push_back(Cacheus_init(cc_params, nullptr));
+    caches.push_back(Sieve_init(cc_params, nullptr));
+    caches.push_back(S3FIFO_init(cc_params, nullptr));
+    caches.push_back(LHD_init(cc_params, nullptr));
+    caches.push_back(GDSF_init(cc_params, nullptr));
+  
+  }
+
+  const int NUM_CACHE_ALGORITHMS = (int)caches.size();
   cache_stat_t *result;
   result = simulate_with_multi_caches(
-    reader, caches, NUM_CACHE_ALGORITHMS, nullptr, 0.0, 0,
+    reader, caches.data(), NUM_CACHE_ALGORITHMS, nullptr, 0.0, 0,
     static_cast<int>(std::thread::hardware_concurrency()), false, false
   );
 
@@ -69,7 +83,8 @@ void run_baselines(reader_t *reader) {
 }
 
 int main(int argc, char *argv[]) {
-  assert(argc >= 2 && "./run_baselines.o <trace_path> [--ignore] [--percent P | --size S]");
+  assert(argc >= 2 &&
+         "./run_baselines.o <trace_path> (--percent P | --size S) [--ignore] [--learned]");
   const char *trace_path = argv[1];
 
   bool ignore_obj_size = false;
@@ -81,6 +96,10 @@ int main(int argc, char *argv[]) {
     std::string flag = argv[i];
     if(flag == "--ignore") {
         ignore_obj_size = true;
+    } else if(flag == "--learned") {
+        // Run the learned-cache baselines (LRB-OMR, ThreeLCache-BMR, LeCaR)
+        // instead of the 7 published heuristics.
+        run_learned = true;
     } else if(flag == "--percent") {
         if(i + 1 >= argc) {
             fprintf(stderr, "Error: --percent requires a value\n");
