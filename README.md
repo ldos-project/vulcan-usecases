@@ -31,13 +31,22 @@ You will also need a running MongoDB instance (default: `mongodb://localhost:270
    ```
    This produces four MongoDB dump directories: `Baselines_size/`, `Baselines_nosize/`, `ChunkedTraces_size/`, and `ChunkedTraces_nosize/`.
 
-2. Restore the dumps into your local MongoDB:
+2a. Restore the dumps into your local MongoDB:
    ```bash
    mongorestore --db Baselines_size Baselines_size/
    mongorestore --db Baselines_nosize Baselines_nosize/
    mongorestore --db ChunkedTraces_size ChunkedTraces_size/
    mongorestore --db ChunkedTraces_nosize ChunkedTraces_nosize/
    ```
+
+2b. Load the learned-cache baselines (LRB, 3L-Cache, LeCaR). These were added after the original artifact was created, and ship as two JSON files (one per DB). This upserts 96 rows (3 caches x 8 traces x {0.001, 0.1} x {size, nosize}). If you wish to rerun these results yourselves, use `run_baselines.o --learned`.
+   ```bash
+   mongoimport --db Baselines_size   --collection baselines_percent --jsonArray \
+     --mode upsert --upsertFields trace_name,cache_name,percent --file learned_baselines_size.json
+   mongoimport --db Baselines_nosize --collection baselines_percent --jsonArray \
+     --mode upsert --upsertFields trace_name,cache_name,percent --file learned_baselines_nosize.json
+   ```
+
 
 3. Generate the paper plots:
    ```bash
