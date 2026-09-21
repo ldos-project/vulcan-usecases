@@ -43,7 +43,7 @@ ALGO_COLORS = {
 DISPLAY = {
     "S3FIFO-0.1000-2": "S3-FIFO",
     "LRB-OMR":         "LRB",
-    "ThreeLCache-BMR": "3L-BMR",
+    "ThreeLCache-BMR": "3L-Cache",
     "VulcanPQEvolve":  "Vulcan",
     "VulcanPQEvolve-NoListener": "Vulcan-NL",
 }
