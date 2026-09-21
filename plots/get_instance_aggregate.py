@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
-Summarize how Vulcan ranks against baselines (and the Belady oracle) across all
-workload instances.
+Summarize how Vulcan ranks against baselines across all workload instances.
 
 An "instance" is a (trace, cache_size, size-mode) triple. For the TRACES list in
 plot_workload_instances.py, cache sizes {0.1, 0.001}, and size-modes
@@ -26,7 +25,6 @@ import argparse
 import pymongo
 
 from plot_workload_instances import (
-    BASE_ALGOS,
     DISPLAY,
     MONGO,
     TRACES,
@@ -42,20 +40,35 @@ from plot_workload_instances import (
 CACHE_SIZES = [0.1, 0.001]
 SIZE_MODES = [False, True]  # ignore_size flag
 
-BASELINE_BUCKETS = ["better", "within-5%", "within-10%", "worse", "worse-than-all"]
+# The baselines Vulcan is actually compared against in the paper figures -- the
+# plotted markers, minus FIFO (the reference line MRR is measured from) and the
+# oracle. Keep this in sync with PLOT_ALGOS in plot_workload_instances.py so the
+# "best/worst baseline" and rank counts reflect exactly what appears in the
+# paper, not every algorithm sitting in the database.
+BASELINE_ALGOS = [
+    "Cacheus", "LRU", "Sieve", "S3FIFO-0.1000-2", "LHD", "GDSF", "LeCaR",
+    "LRB-OMR", "ThreeLCache-BMR",
+]
+
+BASELINE_BUCKETS = ["better", "within-1%", "within-5%", "within-10%", "worse"]
 ORACLE_BUCKETS = ["matches-or-beats", "within-5%", "within-10%", "worse"]
 
 
-def classify_vs_baseline(vulcan_mr: float, best_mr: float, worst_mr: float) -> str:
+def classify_vs_baseline(vulcan_mr: float, best_mr: float) -> str:
     if vulcan_mr < best_mr:
         return "better"
+    if vulcan_mr <= best_mr * 1.01:
+        return "within-1%"
     if vulcan_mr <= best_mr * 1.05:
         return "within-5%"
     if vulcan_mr <= best_mr * 1.10:
         return "within-10%"
-    if vulcan_mr > worst_mr:
-        return "worse-than-all"
     return "worse"
+
+
+def rank_vs_baselines(vulcan_mr: float, baseline_mrs) -> int:
+    """Number of baselines that strictly beat Vulcan (0 == beats all)."""
+    return sum(1 for mr in baseline_mrs if mr < vulcan_mr)
 
 
 def classify_vs_oracle(vulcan_mr: float, oracle_mr: float) -> str:
@@ -119,7 +132,7 @@ def main():
 
                 baseline_mrs = {
                     a: baselines[a]
-                    for a in BASE_ALGOS
+                    for a in BASELINE_ALGOS
                     if a in baselines and a != oracle_algo
                 }
                 if not baseline_mrs:
@@ -127,8 +140,8 @@ def main():
                     continue
 
                 best_algo, best_mr = min(baseline_mrs.items(), key=lambda kv: kv[1])
-                worst_mr = max(baseline_mrs.values())
-                b_bucket = classify_vs_baseline(v_mr, best_mr, worst_mr)
+                b_bucket = classify_vs_baseline(v_mr, best_mr)
+                rank = rank_vs_baselines(v_mr, baseline_mrs.values())
 
                 oracle_mr = baselines.get(oracle_algo) if args.oracle else None
                 fifo_mr = baselines.get("FIFO") if args.oracle else None
@@ -149,6 +162,7 @@ def main():
                     "best_algo": best_algo,
                     "best_mr": best_mr,
                     "delta_pct": (v_mr - best_mr) / best_mr * 100,
+                    "rank": rank,
                     "oracle_algo": oracle_algo,
                     "oracle_mr": oracle_mr,
                     "gap_pct": gap_pct,
@@ -185,12 +199,33 @@ def main():
         print(f"Classified: {len(instances)}   Missing data: {len(missing)}")
         print()
 
+        # "within-X%" reads naturally as cumulative (within 5% includes the
+        # beats-all and within-1% instances), which is how the prose quotes it,
+        # so report a running total alongside the per-bucket slice.
         print(f"--- {label} vs best non-oracle baseline ---")
-        print(f"{'Bucket':<12} {'Count':>6} {'Share':>8}")
-        print("-" * 28)
+        print(f"{'Bucket':<12} {'Count':>6} {'Share':>8}   {'<= cumulative':>16}")
+        print("-" * 46)
+        denom = len(instances)
+        cum = 0
         for b in BASELINE_BUCKETS:
-            summary_row(b, baseline_buckets[b], len(instances))
+            n = len(baseline_buckets[b])
+            share = (n / denom * 100) if denom else 0.0
+            if b == "worse":
+                tail = ""  # "worse" is the remainder; a cumulative count is meaningless
+            else:
+                cum += n
+                cum_share = (cum / denom * 100) if denom else 0.0
+                tail = f"   {cum:>6} {cum_share:>7.1f}%"
+            print(f"{b:<12} {n:>6} {share:>7.1f}%{tail}")
         print()
+
+        if instances:
+            denom = len(instances)
+            for k in (1, 2, 3):
+                n = sum(1 for r in instances if r["rank"] < k)
+                print(f"within top-{k:<2} (<= {k - 1} baselines beat it): "
+                      f"{n:>3} / {denom}  ({n / denom * 100:.1f}%)")
+            print()
 
         if args.oracle:
             oracle_classified = sum(len(v) for v in oracle_buckets.values())
@@ -220,15 +255,15 @@ def main():
             print("=== per-instance detail ===")
             header = (f"{'trace':<22} {'cache':>7} {'mode':>7} "
                       f"{'vulcan':>9} {'best':>9} {'best_algo':<18} {'Δbase%':>8} "
-                      f"{'vs-base':<11}")
+                      f"{'rank':>5} {'vs-base':<12}")
             if args.oracle:
                 header += f" {'oracle':>9} {'gap%':>8} {'recov':>7} {'vs-oracle':<18}"
             print(header)
             for r in sorted(instances, key=lambda r: (r["cache_size"], r["mode"], r["trace"])):
                 line = (f"{r['trace']:<22} {r['cache_size']:>7} {r['mode']:>7} "
                         f"{r['vulcan']:>9.4f} {r['best_mr']:>9.4f} {r['best_algo']:<18} "
-                        f"{r['delta_pct']:>+8.2f} "
-                        f"{r['b_bucket']:<11}")
+                        f"{r['delta_pct']:>+8.2f} {r['rank']:>5} "
+                        f"{r['b_bucket']:<12}")
                 if args.oracle:
                     oracle_mr = f"{r['oracle_mr']:.4f}" if r["oracle_mr"] is not None else "-"
                     gap = f"{r['gap_pct']:+.2f}" if r["gap_pct"] is not None else "-"
@@ -280,7 +315,7 @@ def main():
             print(f"Improvement of {thor_label} over {nolist_label} (miss_ratio):")
             print(f"  mean   {sum(improvements) / len(improvements):+.2f}%")
             print(f"  median {median:+.2f}%")
-            print(f"  min    {min(improvements):+.2f}%   max {max(improvements):+.2f}%")
+            print(f"  max {max(improvements):+.2f}%")
             print()
 
             if args.detail:
