@@ -4,6 +4,9 @@ Compare baseline cache algorithms vs Vulcan on the w* traces (instances of diffe
 """
 import argparse
 import os
+import matplotlib
+matplotlib.rcParams['pdf.fonttype'] = 42
+matplotlib.rcParams['ps.fonttype'] = 42
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import numpy as np
